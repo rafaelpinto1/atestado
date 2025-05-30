@@ -51,6 +51,33 @@ async function getListId(siteId, accessToken) {
   return list.id;
 }
 
+async function uploadFileAsAttachment(siteId, listId, itemId, accessToken, file) {
+  // SharePoint aceita upload de anexos até 10MB via Microsoft Graph
+  const uploadUrl = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items/${itemId}/attachments/add`;
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  // A API do Graph para anexos usa PUT com o conteúdo binário direto, não FormData
+  // Então, vamos fazer o upload com PUT e body = file (binário)
+
+  const response = await fetch(`${uploadUrl}?name=${encodeURIComponent(file.name)}`, {
+    method: "POST", // ou PUT? Docs dizem POST para add attachment
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": file.type || "application/octet-stream",
+    },
+    body: file,
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error("Erro ao enviar anexo: " + (err.error?.message || response.statusText));
+  }
+
+  return await response.json();
+}
+
 async function uploadFileToSharePoint(siteId, listId, accessToken, file, funcionario, dataAusencia) {
   // Cria o item na lista com os campos
   const itemFields = {
@@ -79,53 +106,8 @@ async function uploadFileToSharePoint(siteId, listId, accessToken, file, funcion
   const createdItem = await createItemResponse.json();
   const itemId = createdItem.id;
 
-  // Pega o driveId do site para upload do arquivo
-  const driveResponse = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive`,
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }
-  );
-  if (!driveResponse.ok) throw new Error("Erro ao buscar drive: " + driveResponse.statusText);
-  const driveData = await driveResponse.json();
-  const driveId = driveData.id;
-
-  // Upload do arquivo na raiz da biblioteca Documents
-  const uploadUrl = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${file.name}:/content`;
-
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": file.type,
-    },
-    body: file,
-  });
-
-  if (!uploadResponse.ok) {
-    const err = await uploadResponse.json();
-    throw new Error("Erro ao enviar arquivo: " + (err.error?.message || uploadResponse.statusText));
-  }
-
-  const uploadedFile = await uploadResponse.json();
-
-  // Atualiza o item da lista com o link do arquivo no campo Atestado
-  const updateResponse = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items/${itemId}/fields`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ Atestado: uploadedFile.webUrl }),
-    }
-  );
-
-  if (!updateResponse.ok) {
-    const err = await updateResponse.json();
-    throw new Error("Erro ao atualizar item: " + (err.error?.message || updateResponse.statusText));
-  }
+  // Agora faz upload do arquivo como anexo do item criado
+  await uploadFileAsAttachment(siteId, listId, itemId, accessToken, file);
 
   return true;
 }
