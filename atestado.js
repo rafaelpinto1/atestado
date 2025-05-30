@@ -7,7 +7,7 @@ const msalConfig = {
 };
 
 const loginScopes = ["User.Read"];
-const graphScopes = ["Sites.ReadWrite.All"];
+const graphScopes = ["Mail.Send", "User.Read"]; // Precisa do Mail.Send para enviar email
 
 const msalInstance = new msal.PublicClientApplication(msalConfig);
 
@@ -29,85 +29,60 @@ loginBtn.addEventListener("click", async () => {
   }
 });
 
-async function getSiteId(accessToken) {
-  const response = await fetch(
-    "https://graph.microsoft.com/v1.0/sites/gsilvainfo.sharepoint.com:/sites/Adm",
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  );
-  if (!response.ok) throw new Error("Erro ao buscar site: " + response.statusText);
-  const data = await response.json();
-  return data.id;
+// Função para converter arquivo para Base64
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => {
+      // Remove o prefixo "data:<mime>;base64," para deixar só o conteúdo base64
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = error => reject(error);
+  });
 }
 
-async function getListId(siteId, accessToken) {
-  const response = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  );
-  if (!response.ok) throw new Error("Erro ao buscar listas: " + response.statusText);
-  const data = await response.json();
-  const list = data.value.find((l) => l.name === "Atestados");
-  if (!list) throw new Error("Lista 'Atestados' não encontrada.");
-  return list.id;
-}
+async function sendEmailWithAttachment(accessToken, file, funcionario, dataAusencia) {
+  const base64File = await toBase64(file);
 
-async function uploadFileAsAttachment(siteId, listId, itemId, accessToken, file) {
-  // SharePoint aceita upload de anexos até 10MB via Microsoft Graph
-  const uploadUrl = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items/${itemId}/attachments/add`;
+  const email = {
+    message: {
+      subject: `Atestado Médico - ${funcionario}`,
+      body: {
+        contentType: "Text",
+        content: `Segue em anexo o atestado médico referente à ausência em ${dataAusencia}.`,
+      },
+      toRecipients: [
+        {
+          emailAddress: {
+            address: "informatica@gsilva.com.br",
+          },
+        },
+      ],
+      attachments: [
+        {
+          "@odata.type": "#microsoft.graph.fileAttachment",
+          name: file.name,
+          contentBytes: base64File,
+        },
+      ],
+    },
+  };
 
-  const formData = new FormData();
-  formData.append("file", file);
-
-  // A API do Graph para anexos usa PUT com o conteúdo binário direto, não FormData
-  // Então, vamos fazer o upload com PUT e body = file (binário)
-
-  const response = await fetch(`${uploadUrl}?name=${encodeURIComponent(file.name)}`, {
-    method: "POST", // ou PUT? Docs dizem POST para add attachment
+  const response = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+    method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
-      "Content-Type": file.type || "application/octet-stream",
+      "Content-Type": "application/json",
     },
-    body: file,
+    body: JSON.stringify(email),
   });
 
   if (!response.ok) {
     const err = await response.json();
-    throw new Error("Erro ao enviar anexo: " + (err.error?.message || response.statusText));
+    throw new Error("Erro ao enviar email: " + (err.error?.message || response.statusText));
   }
-
-  return await response.json();
-}
-
-async function uploadFileToSharePoint(siteId, listId, accessToken, file, funcionario, dataAusencia) {
-  // Cria o item na lista com os campos
-  const itemFields = {
-    Title: `Atestado de ${funcionario} - ${new Date().toLocaleDateString()}`,
-    Funcionario: funcionario,
-    DataAusencia: dataAusencia,
-  };
-
-  const createItemResponse = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ fields: itemFields }),
-    }
-  );
-
-  if (!createItemResponse.ok) {
-    const err = await createItemResponse.json();
-    throw new Error("Erro ao criar item: " + (err.error?.message || createItemResponse.statusText));
-  }
-
-  const createdItem = await createItemResponse.json();
-  const itemId = createdItem.id;
-
-  // Agora faz upload do arquivo como anexo do item criado
-  await uploadFileAsAttachment(siteId, listId, itemId, accessToken, file);
 
   return true;
 }
@@ -116,7 +91,7 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   statusDiv.style.color = "black";
-  statusDiv.textContent = "Enviando atestado...";
+  statusDiv.textContent = "Enviando atestado por e-mail...";
 
   const funcionario = funcionarioInput.value;
   const dataAusencia = dataAusenciaInput.value;
@@ -133,13 +108,10 @@ form.addEventListener("submit", async (e) => {
       .catch(() => msalInstance.acquireTokenPopup({ scopes: graphScopes }));
     const accessToken = tokenResponse.accessToken;
 
-    const siteId = await getSiteId(accessToken);
-    const listId = await getListId(siteId, accessToken);
-
-    await uploadFileToSharePoint(siteId, listId, accessToken, file, funcionario, dataAusencia);
+    await sendEmailWithAttachment(accessToken, file, funcionario, dataAusencia);
 
     statusDiv.style.color = "green";
-    statusDiv.textContent = "Atestado enviado com sucesso!";
+    statusDiv.textContent = "Atestado enviado por e-mail com sucesso!";
     form.reset();
     loginBtn.style.display = "block";
     form.classList.add("d-none");
