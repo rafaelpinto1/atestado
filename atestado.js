@@ -14,6 +14,7 @@ const msalInstance = new msal.PublicClientApplication(msalConfig);
 const loginBtn = document.getElementById("btnLogin");
 const form = document.getElementById("atestadoForm");
 const funcionarioInput = document.getElementById("funcionario");
+const dataAusenciaInput = document.getElementById("dataAusencia");
 const statusDiv = document.getElementById("status");
 
 loginBtn.addEventListener("click", async () => {
@@ -45,20 +46,17 @@ async function getListId(siteId, accessToken) {
   );
   if (!response.ok) throw new Error("Erro ao buscar listas: " + response.statusText);
   const data = await response.json();
-  const list = data.value.find((l) => l.name === "AtestadosMedicos");
-  if (!list) throw new Error("Lista 'AtestadosMedicos' não encontrada.");
+  const list = data.value.find((l) => l.name === "Atestados");
+  if (!list) throw new Error("Lista 'Atestados' não encontrada.");
   return list.id;
 }
 
-async function uploadFileToSharePoint(siteId, listId, accessToken, file, funcionario) {
-  // SharePoint list items don't armazenam arquivos diretamente,
-  // então vamos criar o item e subir o arquivo na biblioteca de documentos ou em anexos da lista.
-  // Aqui vamos subir o arquivo como anexo da lista (exemplo básico).
-
-  // Primeiro criar o item:
+async function uploadFileToSharePoint(siteId, listId, accessToken, file, funcionario, dataAusencia) {
+  // Cria o item na lista com os campos
   const itemFields = {
     Title: `Atestado de ${funcionario} - ${new Date().toLocaleDateString()}`,
     Funcionario: funcionario,
+    DataAusencia: dataAusencia,
   };
 
   const createItemResponse = await fetch(
@@ -81,16 +79,7 @@ async function uploadFileToSharePoint(siteId, listId, accessToken, file, funcion
   const createdItem = await createItemResponse.json();
   const itemId = createdItem.id;
 
-  // Agora subir o arquivo como anexo ao item da lista:
-  // O Graph API para anexos usa endpoint:
-  // POST /sites/{siteId}/lists/{listId}/items/{itemId}/attachments/createUploadSession
-
-  // Porém, o upload em anexo para o Graph é meio complexo. Alternativa:
-  // Você pode subir o arquivo numa biblioteca de documentos (Drive) e salvar a URL no item da lista.
-
-  // Para simplificar, aqui vamos subir para a biblioteca 'Documents' do site:
-
-  // Pega driveId do site
+  // Pega o driveId do site para upload do arquivo
   const driveResponse = await fetch(
     `https://graph.microsoft.com/v1.0/sites/${siteId}/drive`,
     {
@@ -101,7 +90,7 @@ async function uploadFileToSharePoint(siteId, listId, accessToken, file, funcion
   const driveData = await driveResponse.json();
   const driveId = driveData.id;
 
-  // Upload simples do arquivo na raiz da biblioteca:
+  // Upload do arquivo na raiz da biblioteca Documents
   const uploadUrl = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${file.name}:/content`;
 
   const uploadResponse = await fetch(uploadUrl, {
@@ -120,7 +109,7 @@ async function uploadFileToSharePoint(siteId, listId, accessToken, file, funcion
 
   const uploadedFile = await uploadResponse.json();
 
-  // Agora atualiza o item da lista com link para o arquivo:
+  // Atualiza o item da lista com o link do arquivo no campo Atestado
   const updateResponse = await fetch(
     `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items/${itemId}/fields`,
     {
@@ -129,7 +118,7 @@ async function uploadFileToSharePoint(siteId, listId, accessToken, file, funcion
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ LinkAtestado: uploadedFile.webUrl }),
+      body: JSON.stringify({ Atestado: uploadedFile.webUrl }),
     }
   );
 
@@ -148,6 +137,7 @@ form.addEventListener("submit", async (e) => {
   statusDiv.textContent = "Enviando atestado...";
 
   const funcionario = funcionarioInput.value;
+  const dataAusencia = dataAusenciaInput.value;
   const fileInput = document.getElementById("fileAtestado");
   if (!fileInput.files.length) {
     alert("Por favor, escolha um arquivo.");
@@ -156,17 +146,21 @@ form.addEventListener("submit", async (e) => {
   const file = fileInput.files[0];
 
   try {
-    const tokenResponse = await msalInstance.acquireTokenSilent({ scopes: graphScopes }).catch(() => msalInstance.acquireTokenPopup({ scopes: graphScopes }));
+    const tokenResponse = await msalInstance
+      .acquireTokenSilent({ scopes: graphScopes })
+      .catch(() => msalInstance.acquireTokenPopup({ scopes: graphScopes }));
     const accessToken = tokenResponse.accessToken;
 
     const siteId = await getSiteId(accessToken);
     const listId = await getListId(siteId, accessToken);
 
-    await uploadFileToSharePoint(siteId, listId, accessToken, file, funcionario);
+    await uploadFileToSharePoint(siteId, listId, accessToken, file, funcionario, dataAusencia);
 
     statusDiv.style.color = "green";
     statusDiv.textContent = "Atestado enviado com sucesso!";
     form.reset();
+    loginBtn.style.display = "block";
+    form.classList.add("d-none");
   } catch (err) {
     statusDiv.style.color = "red";
     statusDiv.textContent = "Erro: " + err.message;
